@@ -3,7 +3,7 @@
 **Deploy-time enforcement of supply-chain integrity on Kubernetes.** A Kyverno admission
 policy only lets a Pod start in an enforced namespace if its image:
 
-1. has a **Sigstore signature** from *your* `supply-chain` pipeline (exact workflow, on `main`,
+1. has a **Sigstore signature** from *your* `supply-chain-lab` pipeline (exact workflow, on `main`,
    via GitHub Actions OIDC, recorded in the public Rekor log),
 2. has a **SLSA build provenance** attestation saying it was built from your repo, on `main`, by a
    **GitHub-hosted runner**,
@@ -127,12 +127,33 @@ The job fails if any case behaves unexpectedly. It also runs weekly, so an upstr
 - **Autogen** (Kyverno default) extends the Pod rule to Deployments, StatefulSets, Jobs etc., so a
   bad Deployment is rejected at `kubectl apply`, not later at the ReplicaSet.
 
+## First real run (e2e on GitHub Actions, 2026-11-05)
+
+Kind v0.33.0 (Kubernetes v1.37.0), Kyverno v1.19.2. Kyverno's logs showed each check separately:
+
+| Case | Result | Kyverno log |
+|---|---|---|
+| `unsigned` (busybox) | ✅ denied | `sigstore bundle verification failed: no matching signatures found` |
+| `wrong-identity` | ✅ denied | same: valid signatures, but **not from your workflow identity** |
+| `unsigned-sandbox` | ✅ admitted | namespace not enforced |
+| `signed` | ❌ denied (**config issue, not a security failure**) | ① `image attestors verification succeeded` (signature) ✅ → ② SLSA provenance with all 4 conditions `verification succeeded` ✅ → ③ SBOM: `context size limit exceeded: 2265002 bytes exceeds limit of 2097152 bytes` |
+
+**Root cause:** Kyverno loads each verified attestation into its policy-evaluation context, which is
+capped by `config.maxContextSize` (default **2Mi**). The SPDX SBOM of this small Python image is
+already ~2.2 MB. **Fix:** `setup.sh` installs Kyverno with `config.maxContextSize=8Mi` (chart value
+`config.maxContextSize`, accepts Kubernetes quantities; checked in the chart's `values.yaml` and
+`pkg/config/config.go`). The policy still **failed closed** on a resource limit, which is the right
+behaviour. Trade-off: a larger cap means more memory per admission request. SBOM size grows with
+image size, so in production, size this cap from your largest SBOM, or verify only that the SBOM
+attestation exists in a separate, lighter check.
+
 ## Troubleshooting
 
 | Symptom | Likely cause |
 |---|---|
 | `signed` is denied | `GH_OWNER` case doesn't match your GitHub URL; package still private; Project 1's last run on `main` failed before signing |
 | Everything denied, even `sandbox` | You labelled `sandbox`, or the policy match was edited |
+| `context size limit exceeded` | An attestation (usually the SBOM) is larger than Kyverno's `config.maxContextSize`; raise it in `setup.sh` |
 | Timeouts | The cluster can't reach `ghcr.io` / `rekor.sigstore.dev` (proxy or firewall) |
 | Logs | `kubectl logs -n kyverno -l app.kubernetes.io/component=admission-controller` |
 
@@ -153,7 +174,11 @@ The job fails if any case behaves unexpectedly. It also runs weekly, so an upstr
 | `scripts/test.sh` logic: PASS on correct decisions, **exit 1** when the policy doesn't enforce | Run against a stub `kubectl` for both scenarios |
 | Shell scripts / workflow | `shellcheck` clean · `check-jsonschema` valid · `zizmor` 0 medium/high |
 
-**Not yet verified:** a real admission decision. There was no Docker or Kubernetes in the
+**Now verified on a real cluster:** signature identity, SLSA provenance conditions, the
+wrong-identity and unsigned denials, and namespace scoping (see *First real run*).
+**Still to verify:** the `signed` case admitted after the `maxContextSize` fix.
+
+~~**Not yet verified:** a real admission decision.~~ There was no Docker or Kubernetes in the
 environment where this was written. The `e2e` workflow (or `scripts/setup.sh` + `test.sh`
 locally) is the proof. The riskiest assumption is that Kyverno's referrer lookup works against
 GHCR for *your* image the way it does in Kyverno's conformance test (also a GHCR image with GitHub
