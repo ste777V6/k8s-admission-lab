@@ -147,12 +147,21 @@ behaviour. Trade-off: a larger cap means more memory per admission request. SBOM
 image size, so in production, size this cap from your largest SBOM, or verify only that the SBOM
 attestation exists in a separate, lighter check.
 
+**Run 2:** the `maxContextSize=8Mi` setting took effect (Kyverno log: `maxContextSize configured
+bytes=8388608`), but setup stopped earlier on a **startup race**: `helm --wait` returned when the Kyverno
+pod was Ready, while its webhook server was still waiting for its TLS certificate
+(`secret "kyverno-svc.kyverno.svc.kyverno-tls-pair" not found`). Kyverno validates policies through
+its own fail-closed webhook, so `kubectl apply` got `connection refused`. Run 1 passed this step only
+by timing. **Fix:** `setup.sh` retries applying the policy every 5 s for up to 2 minutes, then fails
+with a clear message. Both paths were tested with a stubbed `kubectl`.
+
 ## Troubleshooting
 
 | Symptom | Likely cause |
 |---|---|
 | `signed` is denied | `GH_OWNER` case doesn't match your GitHub URL; package still private; Project 1's last run on `main` failed before signing |
 | Everything denied, even `sandbox` | You labelled `sandbox`, or the policy match was edited |
+| `failed calling webhook "mutate-policy.kyverno.svc" … connection refused` | Kyverno's webhook not serving yet; `setup.sh` retries for 2 minutes |
 | `context size limit exceeded` | An attestation (usually the SBOM) is larger than Kyverno's `config.maxContextSize`; raise it in `setup.sh` |
 | Timeouts | The cluster can't reach `ghcr.io` / `rekor.sigstore.dev` (proxy or firewall) |
 | Logs | `kubectl logs -n kyverno -l app.kubernetes.io/component=admission-controller` |

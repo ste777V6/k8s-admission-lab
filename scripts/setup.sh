@@ -27,7 +27,20 @@ helm upgrade --install kyverno kyverno/kyverno \
 
 bash scripts/render.sh
 kubectl apply -f manifests/namespaces.yaml
-kubectl apply -f build/verify-supply-chain.yaml
+# `helm --wait` returns when the Kyverno pod is Ready, but its webhook server can
+# still be waiting for its TLS certificate. Kyverno validates policies through its
+# own (fail-closed) webhook, so applying too early fails with "connection refused".
+# Retry until the webhook answers (seen in e2e run 2, 2026-11-05).
+for attempt in $(seq 1 24); do
+  if kubectl apply -f build/verify-supply-chain.yaml; then
+    break
+  fi
+  if [[ "$attempt" -eq 24 ]]; then
+    echo "Kyverno webhook still not reachable after 2 minutes." >&2; exit 1
+  fi
+  echo "Kyverno webhook not ready yet; retrying in 5s ($attempt/24)..."
+  sleep 5
+done
 kubectl wait --for=condition=Ready clusterpolicy/verify-supply-chain --timeout=120s
 echo "Kyverno config maxContextSize: $(kubectl get configmap kyverno -n kyverno -o jsonpath='{.data.maxContextSize}')"
 echo "Kyverno installed and policy Ready."
