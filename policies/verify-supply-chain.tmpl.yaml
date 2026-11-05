@@ -1,0 +1,81 @@
+# Kyverno ClusterPolicy: only admit Pods (and, via autogen, Deployments,
+# StatefulSets, Jobs, ...) in namespaces labelled supply-chain=enforced whose
+# images were built and signed by supply-chain-lab's pipeline on main.
+#
+# __GH_OWNER__ / __GH_REPO__ / __IMAGE_REPO__ are filled in by scripts/render.sh.
+#
+# type: SigstoreBundle reads Sigstore bundles attached as OCI referrers. That
+# is the format written by cosign v3 (default) and by actions/attest with
+# push-to-registry: true, i.e. exactly what Project 1 produces.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-supply-chain
+  annotations:
+    policies.kyverno.io/title: Verify supply-chain-lab signatures and provenance
+    policies.kyverno.io/category: Software Supply Chain Security
+    policies.kyverno.io/severity: high
+spec:
+  background: false # image verification runs at admission time
+  webhookConfiguration:
+    failurePolicy: Fail # if Kyverno can't decide, deny (fail closed)
+    timeoutSeconds: 30
+  rules:
+    - name: signed-attested-by-pipeline
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaceSelector:
+                matchLabels:
+                  supply-chain: enforced
+      verifyImages:
+        - imageReferences: ["*"] # EVERY image in enforced namespaces
+          type: SigstoreBundle
+          failureAction: Enforce
+          mutateDigest: true # rewrite tags to the verified digest
+          verifyDigest: true
+          required: true
+          # 1) Signature: some Sigstore bundle on this digest must be signed by
+          #    THIS workflow on main, via GitHub Actions OIDC, logged in public Rekor.
+          attestors:
+            - entries:
+                - keyless:
+                    issuer: https://token.actions.githubusercontent.com
+                    subject: https://github.com/__GH_OWNER__/__GH_REPO__/.github/workflows/supply-chain.yml@refs/heads/main
+                    rekor:
+                      url: https://rekor.sigstore.dev
+          attestations:
+            # 2) SLSA build provenance: built by a GitHub-hosted runner, from
+            #    this repository, on main.
+            - type: https://slsa.dev/provenance/v1
+              attestors:
+                - entries:
+                    - keyless:
+                        issuer: https://token.actions.githubusercontent.com
+                        subject: https://github.com/__GH_OWNER__/__GH_REPO__/.github/workflows/supply-chain.yml@refs/heads/main
+                        rekor:
+                          url: https://rekor.sigstore.dev
+              conditions:
+                - all:
+                    - key: "{{ buildDefinition.buildType }}"
+                      operator: Equals
+                      value: https://actions.github.io/buildtypes/workflow/v1
+                    - key: "{{ buildDefinition.externalParameters.workflow.repository }}"
+                      operator: Equals
+                      value: https://github.com/__GH_OWNER__/__GH_REPO__
+                    - key: "{{ buildDefinition.externalParameters.workflow.ref }}"
+                      operator: Equals
+                      value: refs/heads/main
+                    - key: "{{ buildDefinition.internalParameters.github.runner_environment }}"
+                      operator: Equals
+                      value: github-hosted
+            # 3) An SBOM attestation (SPDX 2.3, as produced by Syft) must exist.
+            - type: https://spdx.dev/Document/v2.3
+              attestors:
+                - entries:
+                    - keyless:
+                        issuer: https://token.actions.githubusercontent.com
+                        subject: https://github.com/__GH_OWNER__/__GH_REPO__/.github/workflows/supply-chain.yml@refs/heads/main
+                        rekor:
+                          url: https://rekor.sigstore.dev

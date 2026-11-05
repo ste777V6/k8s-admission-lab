@@ -1,0 +1,48 @@
+# Test cases. Each document is applied separately by scripts/test.sh.
+# 1) EXPECT ADMIT: your image, signed + attested by your pipeline on main.
+#    Referenced by TAG on purpose: Kyverno verifies and rewrites it to a digest.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: signed
+  namespace: prod
+spec:
+  containers:
+    - name: app
+      image: ghcr.io/__IMAGE_REPO__:latest
+---
+# 2) EXPECT DENY: unsigned public image.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: unsigned
+  namespace: prod
+spec:
+  containers:
+    - name: app
+      image: docker.io/library/busybox:latest
+      command: ["sleep", "3600"]
+---
+# 3) EXPECT DENY: validly signed and attested with GitHub artifact attestations,
+#    but by SOMEONE ELSE's workflow (image used in Kyverno's own conformance tests).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: wrong-identity
+  namespace: prod
+spec:
+  containers:
+    - name: app
+      image: ghcr.io/vishal-chdhry/artifact-attestation-example:artifact-attestation
+---
+# 4) EXPECT ADMIT: unsigned image in a namespace the policy does not cover.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: unsigned-sandbox
+  namespace: sandbox
+spec:
+  containers:
+    - name: app
+      image: docker.io/library/busybox:latest
+      command: ["sleep", "3600"]

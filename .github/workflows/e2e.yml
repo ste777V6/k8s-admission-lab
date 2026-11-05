@@ -1,0 +1,36 @@
+# End-to-end: real kind cluster + Kyverno + policy, then the 4 admission tests.
+# Set repository variables (Settings > Secrets and variables > Actions > Variables):
+#   GH_OWNER = owner of the supply-chain-lab repo (exact case)
+#   GH_REPO  = supply-chain-lab
+name: e2e
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "41 5 * * 1" # weekly: catches upstream changes (Kyverno, Sigstore, image)
+
+permissions:
+  contents: read
+
+jobs:
+  admission:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_OWNER: ${{ vars.GH_OWNER }}
+      GH_REPO: ${{ vars.GH_REPO }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2 (kind v0.33.0)
+      - run: bash scripts/setup.sh --no-cluster
+      - run: bash scripts/test.sh
+      - name: Kyverno logs on failure
+        if: failure()
+        run: kubectl logs -n kyverno -l app.kubernetes.io/component=admission-controller --tail=200
