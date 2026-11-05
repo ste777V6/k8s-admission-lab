@@ -1,3 +1,5 @@
+## First run 
+
 Three of the four cases passed, and the fourth failed on a size limit, not on security. Kyverno’s logs show each check separately:
 
 Case	Result	What Kyverno logged
@@ -25,3 +27,16 @@ git push
 The push starts e2e again. Expect four PASS lines, with signed showing image after admission: ghcr.io/ste777v6/supply-chain@sha256:6dbfed67… (the digest Kyverno verified in this run), and Kyverno config maxContextSize: 8Mi in the setup step.
 
 This run is good interview material as it is: the policy rejected a validly signed image from the wrong identity, and when a resource limit was hit, it failed closed instead of failing open. Send me the next log.
+
+##Second run
+
+All four cases pass on a real cluster. Project 3 works end to end, and the policy is proven both ways:
+
+Case	    Result	    What it proves
+
+signed	    ✅ admitted, pinned to @sha256:6dbfed67…	Signature from          your    workflow on main, SLSA provenance (repo, ref,                       GitHub-hosted runner) and SBOM attestation all verified at admission
+unsigned	✅ denied	    No signature at all → rejected
+wrong-identity	✅ denied	Validly signed by someone else → still                          rejected: who signed matters
+unsigned-sandbox	✅ admitted	Enforcement is scoped to labelled namespaces
+
+Kyverno rewrote the image to …:latest@sha256:6dbfed67…. With both a tag and a digest present, the container runtime pulls by the digest, so the pod runs exactly the image that was verified, even if :latest is moved later. It’s the same digest Kyverno verified in run 1, which ties the result to the image your pipeline built.
